@@ -33,6 +33,7 @@ It is for anyone in the same position: a new printer, a first model, and no feel
 | `resin_orient.py` | The same tool as a standalone script. A test keeps it identical to the copy in `SKILL.md`. |
 | `docs/how-it-works.md` | How each analysis works, step by step, with its limits. |
 | `tests/` | Synthetic parts with known answers, and the tests that run the tool against them. |
+| `LICENSE` | MIT licence. |
 
 ## Using it as a Claude skill
 
@@ -147,3 +148,7 @@ python3 tests/run_tests.py
 ```
 
 The tests build small parts whose answers are known from their geometry, for example a cylinder with a 7 mm radius pocket, which must be reported as a 154 mm² cup when the pocket faces the film and as no cup when it faces the plate. They take about a minute. The parts are synthetic; the tests do not cover real sculpts.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
