@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.npy
+tests/_parts/
+out/

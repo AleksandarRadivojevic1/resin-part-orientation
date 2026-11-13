@@ -1,0 +1,5 @@
+numpy
+scipy
+matplotlib
+# optional: makes `sweep` roughly 10x faster
+numba
