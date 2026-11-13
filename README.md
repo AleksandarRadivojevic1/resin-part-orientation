@@ -17,6 +17,14 @@ It looks for four things that ruin resin prints and that a slicer's auto-orient 
 
 *`check` on a synthetic test torso with a key socket in its top face. The first three poses were the best by overhang score, and all three leave the socket as a sealed cup (red). The fourth pose turns the socket toward the plate: no cup, at the cost of a few islands to support.*
 
+## Why this exists
+
+I am a beginner at resin printing. Between unboxing the printer and getting a first good model, positioning the part was the step I could not get right: which way it should face the plate, how far to tilt it, and where the supports would end up.
+
+This skill is what came out of working through that with Claude over my first prints. The "Lessons" sections of `SKILL.md` are the notes from those prints: ragged fringe that turned out to be islands, layers splitting near the end of long prints, a hollowed part that warped and no longer fitted its neighbour.
+
+It is for anyone in the same position: a new printer, a first model, and no feel yet for how a part should sit on the plate.
+
 ## What is in this repo
 
 | File | What it is |
