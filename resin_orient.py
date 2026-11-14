@@ -6,8 +6,10 @@ Subcommands (all lengths in mm, scale applied before analysis):
   size   PART [PART ...] [--up z] [--native MM]  assembled figure height and the --scale for sizes S/M/L
   sweep  PART --scale S [--n 300] --out F.npy     score build directions (surface islands, overhangs, support load)
   rank   F.npy [--top 12]                        print best directions
-  check  PART --scale S (--from F.npy [--top 8] | --u x,y,z [--u ...]) --out F.png [--json F.json]
+  check  PART --scale S (--from F.npy [--top 8] [--spread 25] [--cupscan N] | --u x,y,z [--u ...]) --out F.png [--json F.json]
                                                  slice candidates: layer area (peel force), suction cups, volume islands
+                                                 --spread: degrees kept between the poses taken from the sweep
+                                                 --cupscan N: coarse-slice the N best directions first; cup-free ones go first
   show   PART --scale S --u x,y,z --out F.png [--views "az,el;..."]   preview: red = islands, orange = needs support
   pack   --plate 153.36x77.76 --margin 6 --out layout.json [--png layout.png] PART@x,y,z@S [...]
   export PART --scale S --u x,y,z [--rotz deg] --out F.stl
@@ -28,6 +30,7 @@ except ImportError:  # slower fallback
     njit = lambda f: f
 
 Z_MAX = 165.0  # Mars 5 Ultra build height
+CUP_MINOR = (100.0, 0.3)  # a sealed cup up to this area (mm2) and volume (ml) is graded minor (key-socket size); above: MAJOR
 
 # ---------------------------------------------------------------- loading
 def load_stl(path):
@@ -70,13 +73,26 @@ def load_3mf(path, name=None):
         V = np.array(v.split(), dtype=np.float64).reshape(-1, 3)
         F = np.array(f.split(), dtype=np.int64).reshape(-1, 3).astype(np.int32)
         return V, F
-    raise SystemExit(f'no mesh object {name!r} in {path}')
+    raise SystemExit(f'no mesh object {name!r} in {path}; mesh objects in the file: {names_3mf(path)}')
 
-def load(part):
+def names_3mf(path):
+    """Names of the objects in a 3MF that carry a mesh of their own."""
+    data = zipfile.ZipFile(path).read('3D/3dmodel.model'); out = []
+    for m in re.finditer(rb'<object\b([^>]*)>', data):
+        end = data.find(b'</object>', m.end())
+        if b'<vertices>' in data[m.end():end if end >= 0 else len(data)]:
+            nm = re.search(rb'name="([^"]*)"', m.group(1)); out.append(nm.group(1).decode() if nm else '')
+    return out
+
+def load(part, fix=True):
     path, _, name = part.partition('#')
-    if path.lower().endswith('.3mf'):
-        return load_3mf(path, name or None)
-    return load_stl(path)
+    V, F = load_3mf(path, name or None) if path.lower().endswith('.3mf') else load_stl(path)
+    if fix:
+        F, flipped, _ = fix_shells(V, F)
+        if flipped:
+            print(f'note: {part}: {flipped} shell(s) had inverted winding and were re-wound '
+                  '(left as they were, they slice as holes in whatever they overlap)', file=sys.stderr)
+    return V, F
 
 # ---------------------------------------------------------------- geometry
 def rot_to_z(u):
@@ -131,6 +147,44 @@ def shells(V, F):
     vol = np.bincount(lab[F[:, 0]], weights=sv, minlength=k)
     used = np.bincount(lab[F[:, 0]], minlength=k) > 0
     return int(used.sum()), vol[used], lab
+
+def _winding_above(P, A, B, C, lo, hi, use):
+    """Signed count of surface crossings on the +z ray from each point of P, over the triangles in `use`.
+    For an outward-wound closed surface the count is 1 for a point inside it and 0 for a point outside."""
+    out = np.zeros(len(P))
+    for i, p in enumerate(P):
+        m = use & (lo[:, 0] <= p[0]) & (hi[:, 0] >= p[0]) & (lo[:, 1] <= p[1]) & (hi[:, 1] >= p[1])
+        a, b, c = A[m], B[m], C[m]
+        den = (b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0])
+        ok = np.abs(den) > 1e-12; den = np.where(ok, den, 1.0)
+        w1 = ((p[0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (p[1] - a[:, 1]) * (c[:, 0] - a[:, 0])) / den
+        w2 = ((b[:, 0] - a[:, 0]) * (p[1] - a[:, 1]) - (b[:, 1] - a[:, 1]) * (p[0] - a[:, 0])) / den
+        w0 = 1 - w1 - w2; z = w0 * a[:, 2] + w1 * b[:, 2] + w2 * c[:, 2]
+        out[i] = np.sign(den[ok & (w0 >= 0) & (w1 >= 0) & (w2 >= 0) & (z > p[2])]).sum()
+    return out
+
+def fix_shells(V, F, samples=24):
+    """Re-wind shells whose winding is inverted against the rest of the part. Returns (F, flipped, cavities).
+    An inward shell is a real cavity when its surface lies inside the other shells (a pre-hollowed part). Otherwise it
+    is a piece exported inside out: the slicer here would subtract it from whatever it overlaps, so it is re-wound.
+    A flipped piece buried entirely inside another piece cannot be told from a cavity and is left alone."""
+    ns, _, lab = shells(V, F)
+    if ns < 2: return F, 0, 0
+    fl = lab[F[:, 0]]
+    sv = np.einsum('ij,ij->i', V[F[:, 0]], np.cross(V[F[:, 1]], V[F[:, 2]])) / 6
+    vol = np.bincount(fl, weights=sv); sgn = 1.0 if sv.sum() >= 0 else -1.0
+    inward = np.nonzero(sgn * vol < -1e-6)[0]
+    if len(inward) == 0: return F, 0, 0
+    F = F.copy(); flipped = cavities = 0
+    A, B, C = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
+    lo = np.minimum(np.minimum(A[:, :2], B[:, :2]), C[:, :2]); hi = np.maximum(np.maximum(A[:, :2], B[:, :2]), C[:, :2])
+    for s in inward[np.argsort(vol[inward] * sgn)]:  # largest first
+        own = fl == s; idx = np.nonzero(own)[0]
+        pick = idx[np.linspace(0, len(idx) - 1, min(samples, len(idx))).astype(int)]
+        inside = sgn * _winding_above(V[F[pick]].mean(1), A, B, C, lo, hi, ~own) > 0.5
+        if inside.mean() > 0.9: cavities += 1; continue
+        F[own] = F[own][:, [0, 2, 1]]; B[own], C[own] = C[own].copy(), B[own].copy(); flipped += 1
+    return F, flipped, cavities
 
 # ---------------------------------------------------------------- islands (surface graph, fast; one shell only)
 @njit
@@ -268,12 +322,13 @@ def slice_check(V, F, u, scale, px, dz, layer):
     floats = np.array(floats)
     h = hi[2]; zz = (np.arange(nz) + 0.5) * dz; top = zz >= 0.8 * h
     kmax = int(np.argmax(area))
-    cup = sealed > 1.0
+    cup = sealed > 1.0; cmax = float(sealed.max()); cvol = float(sealed.sum() * dz / 1000)
+    grade = '-' if cmax <= 1.0 else 'minor' if cmax <= CUP_MINOR[0] and cvol <= CUP_MINOR[1] else 'MAJOR'
     return dict(u=[round(float(x), 3) for x in u], height=round(float(h), 1),
                 islands2=int((floats > 2 * layer + 1e-9).sum()), islands5=int((floats > 5 * layer + 1e-9).sum()),
                 max_area=round(area.max(), 1), max_area_at=round(zz[kmax] / h, 2),
                 late_max_area=round(area[top].max() if top.any() else 0, 1),
-                cup_max_area=round(sealed.max(), 1), cup_volume=round(sealed.sum() * dz / 1000, 3),
+                cup_max_area=round(cmax, 1), cup_volume=round(cvol, 3), cup_grade=grade,
                 cup_from=round(zz[cup].min(), 1) if cup.any() else None, cup_to=round(zz[cup].max(), 1) if cup.any() else None,
                 _area=area, _sealed=sealed, _z=zz)
 
@@ -323,24 +378,31 @@ def prep(part, scale):
     return V, F, fu, area, vertex_normals(V, F, fu, area), edges(V, F)
 
 def cmd_info(a):
-    V, F = load(a.part); V = V * a.scale
+    V, F = load(a.part, fix=False); V = V * a.scale
+    ns = shells(V, F)[0]; F, flipped, cav = fix_shells(V, F)
     vol = abs(np.einsum('ij,ij->i', V[F[:, 0]], np.cross(V[F[:, 1]], V[F[:, 2]])).sum()) / 6
     e = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]]).astype(np.int64); e.sort(1)
     _, c = np.unique(e[:, 0] * len(V) + e[:, 1], return_counts=True)
-    ns, sv, _ = shells(V, F); sgn = 1 if sv.sum() >= 0 else -1
     size = V.max(0) - V.min(0)
     print(f'{a.part}: {len(F)} tris, size {np.round(size, 1)} mm, volume {vol / 1000:.1f} ml, '
           f'open edges {(c == 1).sum()}, non-manifold edges {(c > 2).sum()}, '
-          f'shells {ns} ({(sgn * sv < 0).sum()} inward: cavities or flipped)')
+          f'shells {ns} ({cav + flipped} inward: {cav} cavity, {flipped} flipped)')
     if ns > 1:
         print('  several shells: surface island counts from sweep/show are unreliable here, trust `check`')
+    if flipped:
+        print(f'  {flipped} shell(s) are wound inside out. Every command re-winds them on load, export included.')
+    path, _, name = a.part.partition('#')
+    if path.lower().endswith('.3mf') and not name:
+        nm = names_3mf(path)
+        if len(nm) > 1:
+            print(f'  {len(nm)} mesh objects in this file: {", ".join(nm)}. This is the first; load another as {path}#NAME')
 
 SIZES = {'S': 150.0, 'M': 180.0, 'L': 200.0}  # height of the assembled figure, mm
 
 def cmd_size(a):
     ax = 'xyz'.index(a.up); lo = np.full(3, np.inf); hi = -lo; z0 = []; tall = 0.0
     for part in a.parts:
-        V, _ = load(part); l, h = V.min(0), V.max(0)
+        V, _ = load(part, fix=False); l, h = V.min(0), V.max(0)
         lo = np.minimum(lo, l); hi = np.maximum(hi, h); z0.append(l[ax]); tall = max(tall, (h - l)[ax])
         print(f'{part}: {a.up} from {l[ax]:.1f} to {h[ax]:.1f} mm, size {np.round(h - l, 1)}')
     ext = hi - lo; native = a.native if a.native else ext[ax]
@@ -385,24 +447,43 @@ def cmd_rank(a):
     for i in np.argsort(sc)[:a.top]:
         print(np.round(r[i, :3], 2), r[i, 3:5].astype(int), r[i, 5:].round(1), round(sc[i], 2))
 
+def spaced(order, U, deg, k):
+    """The first k entries of `order` whose directions are at least `deg` degrees from every one already taken."""
+    keep = []; c = np.cos(np.radians(deg))
+    for i in order:
+        if deg <= 0 or all(U[i] @ U[j] < c for j in keep): keep.append(int(i))
+        if len(keep) == k: break
+    return keep
+
 def cmd_check(a):
     V, F = load(a.part)
     cands = []
     if a.sweep:
         r = np.load(a.sweep); sc = scores(r, list(map(float, a.weights.split(','))))
-        cands += [('as exported', r[-1, :3])] + [(f'rank {j + 1}', r[i, :3]) for j, i in enumerate(np.argsort(sc)[:a.top])
-                                                 if i != len(r) - 1]  # last row is the as-exported pose: slice it once
+        full = np.argsort(sc); rank = {int(i): j + 1 for j, i in enumerate(full)}
+        order = full[full != len(r) - 1]  # last row is the as-exported pose: slice it once
+        if a.cupscan:
+            scan = [int(i) for i in order[:a.cupscan]]; cup = {}
+            print(f'cup scan: coarse-slicing the {len(scan)} best directions by score', flush=True)
+            for n, i in enumerate(scan):
+                d = slice_check(V, F, r[i, :3], a.scale, max(a.px, 0.6), 4 * a.layer, a.layer)
+                cup[i] = ('-', 'minor', 'MAJOR').index(d['cup_grade'])
+                if n % 50 == 0: print(f'{n}/{len(scan)}', flush=True)
+            cnt = np.bincount(list(cup.values()), minlength=3)
+            print(f'cup scan (coarse): {cnt[0]} directions without a cup, {cnt[1]} with a minor cup, {cnt[2]} with a MAJOR cup')
+            order = sorted(scan, key=lambda i: cup[i])  # stable: cup-free first, then minor, each best score first
+        cands += [('as exported', r[-1, :3])] + [(f'rank {rank[i]}', r[i, :3]) for i in spaced(order, r[:, :3], a.spread, a.top)]
     cands += [('given', parse_u(s)) for s in (a.u or [])]
     if not cands: raise SystemExit('give --from F.npy or --u')
     res = []
     print('label | u | height | vol islands >2 / >5 | max layer area mm2 @ height frac | max area in top 20% | '
-          'cup max area mm2, volume ml, z range')
+          'cup max area mm2, volume ml, z range, grade')
     for lab, u in cands:
         d = slice_check(V, F, np.asarray(u, float), a.scale, a.px, a.dz, a.layer); d['label'] = lab; res.append(d)
         cz = f"{d['cup_from']}-{d['cup_to']} mm" if d['cup_from'] is not None else '-'
         print(f"{lab:12s} {np.round(u, 2)} {d['height']:6.1f} | {d['islands2']:4d} / {d['islands5']:4d} | "
               f"{d['max_area']:8.1f} @ {d['max_area_at']:.2f} | {d['late_max_area']:8.1f} | "
-              f"{d['cup_max_area']:7.1f}, {d['cup_volume']:.3f}, {cz}", flush=True)
+              f"{d['cup_max_area']:7.1f}, {d['cup_volume']:.3f}, {cz}, {d['cup_grade']}", flush=True)
     import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
     cols = min(4, len(res)); rows = (len(res) + cols - 1) // cols
     fig, axs = plt.subplots(rows, cols, figsize=(4.2 * cols, 3.2 * rows), squeeze=False)
@@ -410,7 +491,8 @@ def cmd_check(a):
         ax.fill_between(d['_z'], d['_area'], color='#8a93b8', alpha=0.6, lw=0, label='layer area')
         if d['_sealed'].max() > 0: ax.fill_between(d['_z'], d['_sealed'], color='#d0312d', alpha=0.8, lw=0, label='sealed cup')
         ax.axvspan(0.8 * d['height'], d['height'], color='#f0a030', alpha=0.15, lw=0)
-        ax.set_title(f"{d['label']}  u={d['u']}\nislands>5: {d['islands5']}  cup: {d['cup_max_area']} mm2", fontsize=9)
+        ax.set_title(f"{d['label']}  u={d['u']}\nislands>5: {d['islands5']}  cup: {d['cup_max_area']} mm2"
+                     + (f" ({d['cup_grade']})" if d['cup_grade'] != '-' else ''), fontsize=9)
         ax.set_xlabel('height above plate, mm', fontsize=8); ax.set_ylabel('mm2', fontsize=8); ax.tick_params(labelsize=7)
     for ax in list(axs.flat)[len(res):]: ax.axis('off')
     axs.flat[0].legend(fontsize=7, loc='upper left')
@@ -516,6 +598,8 @@ def main():
     q = sub.add_parser('rank'); q.add_argument('file'); q.add_argument('--top', type=int, default=12); q.add_argument('--weights', default=WEIGHTS)
     q = sub.add_parser('check'); common(q); q.add_argument('--from', dest='sweep'); q.add_argument('--top', type=int, default=8)
     q.add_argument('--weights', default=WEIGHTS); q.add_argument('--u', action='append')
+    q.add_argument('--spread', type=float, default=25.0, help='degrees kept between poses taken from the sweep; 0 = plain top N')
+    q.add_argument('--cupscan', type=int, default=0, help='coarse-slice this many of the best directions; cup-free ones are checked first, then minor cups')
     q.add_argument('--px', type=float, default=0.3); q.add_argument('--dz', type=float, default=None)
     q.add_argument('--out', required=True); q.add_argument('--json')
     q = sub.add_parser('show'); common(q, True); q.add_argument('--out', required=True)

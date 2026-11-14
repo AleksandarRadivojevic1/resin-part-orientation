@@ -79,6 +79,8 @@ python3 resin_orient.py rank torso.npy
 
 # 5. slice the finalists: islands, layer area, suction cups
 python3 resin_orient.py check torso.stl --scale 0.62 --from torso.npy --out check.png --json check.json
+#    if every finalist has a MAJOR cup, look further down the ranking for poses without one
+python3 resin_orient.py check torso.stl --scale 0.62 --from torso.npy --cupscan 301 --out check2.png
 
 # 6. see where supports would land in a candidate pose
 python3 resin_orient.py show torso.stl --scale 0.62 --u=0.3,0.2,-0.93 \
@@ -107,15 +109,15 @@ Run the tool as `python3 -I resin_orient.py ...` when the model files come from 
 ## How it works, in short
 
 1. **Sweep.** For 300 directions spread evenly over the sphere, plus the as-exported pose, the tool walks the mesh surface from the plate upward and counts islands: places where printing starts with nothing underneath. It also measures the down-facing area and how much support that area would need. Each direction gets a score.
-2. **Check.** The best directions are then sliced for real: the solid is rasterised layer by layer at 0.3 mm by one layer height. This catches what the surface walk cannot: islands on overlapping shells, the area of every layer, and pockets that are sealed against the vat film.
-3. **Choose.** Sealed cups are rejected first, then poses whose largest layers come at the end, then poses that put supports on visible detail. The numbers narrow the choice; the preview images decide it.
+2. **Check.** The best directions, kept at least 25 degrees apart, are then sliced for real: the solid is rasterised layer by layer at 0.3 mm by one layer height. This catches what the surface walk cannot: islands on overlapping shells, the area of every layer, and pockets that are sealed against the vat film.
+3. **Choose.** Large sealed cups are rejected first (a sealed key socket is graded `minor` and can be accepted), then poses whose largest layers come at the end, then poses that put supports on visible detail. The numbers narrow the choice; the preview images decide it.
 4. **Pack and export.** Footprints are packed on the plate with a margin for supports, and each part is written out scaled, rotated and sitting at z = 0.
 
 [docs/how-it-works.md](docs/how-it-works.md) explains each step in detail.
 
 ## Printer and resin defaults
 
-The skill was written for one setup: an Elegoo Mars 5 Ultra (plate 153.36 x 77.76 mm, 165 mm build height, 0.05 mm layers), the Elegoo SatelLite slicer and Elegoo ABS-Like 3.0 resin, printing in a cold garage. The "Lessons" sections of `SKILL.md` come from prints on that setup.
+The skill was written for one setup: an Elegoo Mars 5 Ultra (plate 153.36 x 77.76 mm, 165 mm build height, 0.05 mm layers), the Elegoo SatelLite slicer and Elegoo ABS-Like 3.0 resin, printing in a garage (unheated at first, with an Elegoo chamber heater since November 2026). The "Lessons" sections of `SKILL.md` come from prints on that setup.
 
 For another printer:
 
@@ -136,6 +138,9 @@ If you change the tool, change it in `SKILL.md` and re-extract `resin_orient.py`
 - The sweep reads the surface only. On a part made of several overlapping shells it misses islands, which is why the finalists are always sliced with `check`.
 - `check` slices at 0.3 mm pixels. A feature thinner than that, such as a 0.2 mm strap, can vanish, and whatever it carries then counts as an island. Use `--px 0.15` on thin parts.
 - Open edges (holes in the mesh) make the slices unreliable. `info` reports them.
+- A piece exported inside out is found and re-wound on load. One that sits entirely inside another piece cannot be told from a cavity and is left as it is.
+- The cup grades (`minor` up to 100 mm² and 0.3 ml, `MAJOR` above) are a rule of thumb taken from a handful of prints, not a measured limit. They are `CUP_MINOR` near the top of `resin_orient.py`.
+- A part with a key socket at each end has one sealed socket in almost every pose. The tool reports it; it cannot remove it.
 - `pack` keeps `--margin` around each part, so parts end up about 1.5 to 2 times the margin apart.
 - The S/M/L scale is only as good as the height it is measured from. Parts that are not in their assembled positions need the height given by hand.
 - 3MF support covers the mesh layout that SatelLite writes. Other 3MF files may not load.
@@ -147,7 +152,7 @@ pip install -r requirements.txt -r tests/requirements.txt
 python3 tests/run_tests.py
 ```
 
-The tests build small parts whose answers are known from their geometry, for example a cylinder with a 7 mm radius pocket, which must be reported as a 154 mm² cup when the pocket faces the film and as no cup when it faces the plate. They take about a minute. The parts are synthetic; the tests do not cover real sculpts.
+The tests build small parts whose answers are known from their geometry, for example a cylinder with a 7 mm radius pocket, which must be reported as a 154 mm² cup when the pocket faces the film and as no cup when it faces the plate. They take about two minutes. The parts are synthetic; the tests do not cover real sculpts.
 
 ## Licence
 

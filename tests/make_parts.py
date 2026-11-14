@@ -45,6 +45,16 @@ def make_all(out):
         st |= (np.hypot(X - x, Y - y) < 1.2) & (Z > 15 - L) & (Z <= 15)
     stal = mesh(slab | ((R < 3) & (Z > 1) & (Z <= 15)) | st, h); write_stl(f'{out}/stalactites.stl', *stal)
 
+    # two overlapping spheres as separate shells; in two_flip the smaller one is wound inside out
+    body = mesh(np.sqrt((X - 11) ** 2 + (Y - 15) ** 2 + (Z - 12) ** 2) < 8, h)
+    arm = mesh(np.sqrt((X - 20) ** 2 + (Y - 15) ** 2 + (Z - 12) ** 2) < 5, h)
+    arm = (arm[0] + [0.11, 0.07, 0.13], arm[1])  # off the grid, so the two shells share no vertex
+    for name, f2 in (('two_ok', arm[1]), ('two_flip', arm[1][:, ::-1])):
+        write_stl(f'{out}/{name}.stl', np.vstack([body[0], arm[0]]), np.vstack([body[1], f2 + len(body[0])]))
+
+    # cylinder r 10, h 20 with a key socket (r 4, depth 4) in each end: one socket faces the film in almost every pose
+    write_stl(f'{out}/sockets.stl', *mesh((R < 10) & (Z > 1) & (Z < 21) & ~((R < 4) & ((Z < 5) | (Z > 17))), h))
+
     # low-poly box 30 x 20 x 10: 12 large triangles, binary and ASCII
     v = np.array([[x, y, z] for x in (0, 30) for y in (0, 20) for z in (0, 10)], float)
     f = np.array([[0, 1, 3], [0, 3, 2], [4, 6, 7], [4, 7, 5], [0, 4, 5], [0, 5, 1],
@@ -81,6 +91,9 @@ def make_all(out):
     xml += [f'<vertex x="{p[0]:.6f}" y="{p[1]:.6f}" z="{p[2]:.6f}" />' for p in V]
     xml += ['</vertices><triangles>'] + [f'<triangle v1="{t[0]}" v2="{t[1]}" v3="{t[2]}" />' for t in F]
     xml += ['</triangles></mesh></object>',
+            '<object id="3" name="Tiny_B" type="model"><mesh><vertices><vertex x="0" y="0" z="0" /><vertex x="1" y="0" z="0" />'
+            '<vertex x="0" y="1" z="0" /><vertex x="0" y="0" z="1" /></vertices><triangles><triangle v1="0" v2="2" v3="1" />'
+            '<triangle v1="0" v2="1" v3="3" /><triangle v1="1" v2="2" v3="3" /><triangle v1="0" v2="3" v3="2" /></triangles></mesh></object>',
             '<object id="2" name="Group" type="model"><components><component objectid="1"/></components></object>',
             '</resources><build><item objectid="1"/></build></model>']
     with zipfile.ZipFile(f'{out}/project.goo.3mf', 'w', zipfile.ZIP_DEFLATED) as zf:
