@@ -115,7 +115,7 @@ Run the tool as `python3 -I resin_orient.py ...` when the model files come from 
 
 ## Printer and resin defaults
 
-The skill was written for one setup: an Elegoo Mars 5 Ultra (plate 153.36 x 77.76 mm, 165 mm build height, 0.05 mm layers), the Elegoo SatelLite slicer and Elegoo ABS-Like 3.0 resin, printing in a cold garage. The "Lessons" sections of `SKILL.md` come from prints on that setup.
+The skill was written for one setup: an Elegoo Mars 5 Ultra (plate 153.36 x 77.76 mm, 165 mm build height, 0.05 mm layers), the Elegoo SatelLite slicer and Elegoo ABS-Like 3.0 resin, printing in a garage (unheated at first, with an Elegoo chamber heater since November 2026). The "Lessons" sections of `SKILL.md` come from prints on that setup.
 
 For another printer:
 

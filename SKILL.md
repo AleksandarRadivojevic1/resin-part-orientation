@@ -7,9 +7,9 @@ description: "Orient resin 3D-print parts (STL or SatelLite 3MF) at size S, M or
 
 Use when the user shares resin-print parts (STL, or an Elegoo SatelLite `.goo.3mf` project) and wants them oriented, wants support advice or a plate layout, or asks why a print has ragged or flaky edges or layers splitting apart. The user does the supports in the slicer. This skill delivers the orientation, the layout and pre-oriented files.
 
-Default printer: Elegoo Mars 5 Ultra. Plate 153.36 x 77.76 mm, Z 165 mm, 0.05 mm layers, 18 um pixels, tilt release, no vat heater. Slicer: Elegoo SatelLite. Resin: Elegoo Grey ABS-Like 3.0, stock profile (2.5 s exposure, 2 bottom layers at 32 s, 5 transition layers). The scale comes from the size the user asks for (see Size); they printed their first bust at 60%.
+Default printer: Elegoo Mars 5 Ultra. Plate 153.36 x 77.76 mm, Z 165 mm, 0.05 mm layers, 18 um pixels, tilt release, no built-in vat heater (an Elegoo chamber heater was added in Nov 2026, see below). Slicer: Elegoo SatelLite. Resin: Elegoo Grey ABS-Like 3.0, stock profile (2.5 s exposure, 2 bottom layers at 32 s, 5 transition layers). The scale comes from the size the user asks for (see Size); they printed their first bust at 60%.
 
-The printer is in an unheated garage (11-14 C in autumn and winter). The temperature on the printer's screen is the LED light source, not the resin. Elegoo's working range for the resin is 25-30 C.
+The printer is in a garage at about 15-18 C. Since Nov 2026 an Elegoo heater holds the printer at 24.5-25.5 C. That reading is the air in the printer, not the resin: the resin follows it slowly, and a bottle stored in the garage starts at garage temperature. 25 C is the bottom of Elegoo's 25-30 C working range for the resin, so do not assume the resin is warm unless the heater has had time to bring it up or the user measured the resin itself. The temperature on the printer's screen is the LED light source, not the resin.
 
 ## Size
 
@@ -87,7 +87,7 @@ The user can call the skill with a size, e.g. `/resin-part-orientation M`. A siz
     - Place the parts as in the layout image.
     - Supports: 5 mm Z lift. Generate Auto Support, then use Manual to delete tips on near-vertical visible detail and add a tip at each red circle.
     - Run Island Check, Collision Detection and Cavity Check. Scrub Preview up from layer 1.
-    - Warm the resin to 25-30 C before printing and fill the vat well for long prints.
+    - Start the heater ahead of the print so the resin itself reaches about 25 C (pour from a bottle kept indoors or pre-warmed), and fill the vat well for long prints.
 
 ## Lessons from layer splitting (Nov 2026)
 
@@ -99,6 +99,7 @@ The user can call the skill with a size, e.g. `/resin-part-orientation M`. A siz
   - The overnight temperature drop.
 - Splits spread through the part point to cold resin. One clean split at a set height points to a cup or a large slice. Ask for a photo and compare it with the `check` chart.
 - Fixes on the user's side: warm the bottle and vat indoors, put an insulated cover over the printer, top up the vat, add rest time before and after lift and slow the lift. Raise exposure about 10% only while the resin cannot be warmed, and recalibrate once it is warm.
+- Since the heater went in (Nov 2026), cold resin is no longer the default suspect for splitting, provided the resin had time to warm before the print started. Check the cup and large-slice causes first. Exposure and lift settings tuned in the cold do not carry over: use values calibrated with the heater on.
 - The surface sweep alone can rank a suction cup in its top three. In testing, a pose with a 290 mm2 sealed cup scored second. Run `check` on the finalists every time.
 
 ## Lessons from the first bust
