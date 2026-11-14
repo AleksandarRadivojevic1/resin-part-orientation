@@ -44,11 +44,14 @@ def test_loaders():
     V1, F1 = ro.load(f'{P}/cup.stl'); V2, F2 = ro.load(f'{P}/project.goo.3mf#Cup_A')
     assert len(F1) == len(F2) and np.allclose(V1.max(0) - V1.min(0), V2.max(0) - V2.min(0), atol=1e-4)
     assert 'no mesh of its own' in cli('info', f'{P}/project.goo.3mf#Group', ok=False)
+    assert '2 mesh objects in this file: Cup_A, Tiny_B' in cli('info', f'{P}/project.goo.3mf')
+    assert "['Cup_A', 'Tiny_B']" in cli('info', f'{P}/project.goo.3mf#Cup_X', ok=False)  # a wrong name lists the right ones
+    assert len(ro.load(f'{P}/project.goo.3mf#Tiny_B')[1]) == 4
 
 
 def test_info():
     out = cli('info', f'{P}/hollow.stl')
-    assert 'shells 2 (1 inward' in out and 'open edges 0' in out
+    assert 'shells 2 (1 inward: 1 cavity, 0 flipped)' in out and 'open edges 0' in out
     assert 'volume 6.0 ml' in cli('info', f'{P}/box.stl')
 
 
@@ -85,6 +88,51 @@ def test_inverted_winding_is_handled():
     R = np.frombuffer(b, dt, offset=84).copy(); R['v'] = R['v'][:, ::-1]
     open(f'{P}/cup_flipped.stl', 'wb').write(b[:84] + R.tobytes())
     assert check('cup_flipped.stl', Z)['cup_max_area'] == check('cup.stl', Z)['cup_max_area']
+
+
+def test_flipped_shell_is_rewound():
+    """A piece exported inside out must not be subtracted from the piece it overlaps."""
+    ok, fl = check('two_ok.stl', Z), check('two_flip.stl', Z)
+    for k in ('max_area', 'islands2', 'islands5', 'cup_max_area'):
+        assert ok[k] == fl[k], (k, ok[k], fl[k])
+    assert ok['islands5'] == 1  # the smaller sphere starts in mid-air beside the larger one
+    V, F = ro.load(f'{P}/two_flip.stl', fix=False)
+    raw = ro.slice_check(V, F, Z, 1.0, 0.3, 0.05, 0.05)  # without the fix the small sphere carves a bite out of the large one
+    assert raw['_area'].sum() < 0.8 * ok['_area'].sum()
+    out = cli('info', f'{P}/two_flip.stl')
+    assert 'shells 2 (1 inward: 0 cavity, 1 flipped)' in out and 'wound inside out' in out
+    assert 'shells 2 (0 inward' in cli('info', f'{P}/two_ok.stl')
+    assert 're-wound' in cli('export', f'{P}/two_flip.stl', '--u=0,0,1', '--out', f'{OUT}/two_fixed.stl')
+    assert 'shells 2 (0 inward' in cli('info', f'{OUT}/two_fixed.stl')  # the exported file is clean
+
+
+def test_cup_grades_and_scan():
+    assert check('cup.stl', Z)['cup_grade'] == 'MAJOR'      # 154 mm2 pocket
+    assert check('cup.stl', -Z)['cup_grade'] == '-'
+    up = check('sockets.stl', Z)                             # 50 mm2, 0.2 ml socket facing the film
+    assert up['cup_grade'] == 'minor' and abs(up['cup_max_area'] - np.pi * 16) < 0.08 * np.pi * 16
+    assert check('sockets.stl', -Z)['cup_grade'] == 'minor'  # turned over, the other socket is sealed
+    assert check('sockets.stl', [1, 0, 0])['cup_grade'] == '-'
+    npy = f'{OUT}/so.npy'
+    cli('sweep', f'{P}/sockets.stl', '--n', 60, '--out', npy)
+    out = cli('check', f'{P}/sockets.stl', '--from', npy, '--top', 3, '--cupscan', 61, '--out', f'{OUT}/so.png', '--json', f'{OUT}/so.json')
+    res = json.load(open(f'{OUT}/so.json'))
+    assert 'cup scan (coarse)' in out and res[0]['label'] == 'as exported' and res[0]['cup_grade'] == 'minor'
+    # the socket axis must be within about 2 degrees of horizontal for no cup at all, so the scan's first pick is
+    # the pose where the cup has all but vanished, far down the score ranking
+    assert res[1]['cup_volume'] < 0.002 < res[0]['cup_volume'] and res[1]['cup_max_area'] < 5, res[1]
+    assert int(res[1]['label'].split()[1]) > 3, 'that pose is not among the plain top 3'
+
+
+def test_check_spreads_poses():
+    npy = f'{OUT}/sp.npy'
+    cli('sweep', f'{P}/stalactites.stl', '--n', 60, '--out', npy)
+    r = np.load(npy); order = np.argsort(ro.scores(r, [1, 3, 1, 0.5, 0.25])); order = order[order != len(r) - 1]
+    U = r[ro.spaced(order, r[:, :3], 25.0, 6), :3]
+    ang = np.degrees(np.arccos(np.clip(U @ U.T, -1, 1))) + 180 * np.eye(len(U))
+    assert len(U) == 6 and ang.min() >= 25 - 1e-6, ang.min()
+    assert ro.spaced(order, r[:, :3], 0, 6) == [int(i) for i in order[:6]]  # --spread 0 is the plain top N
+    assert np.allclose(U[0], r[order[0], :3])  # the best pose is always kept
 
 
 def test_rotation():

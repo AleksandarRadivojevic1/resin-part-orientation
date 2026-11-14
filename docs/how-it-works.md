@@ -20,7 +20,9 @@ Binary and ASCII STL are read directly. Identical vertices are merged, so the to
 
 - size and volume;
 - **open edges** (an edge with one triangle: a hole) and **non-manifold edges** (more than two triangles);
-- the number of **shells**, meaning separate connected surfaces. Sculpted kits often consist of pieces that overlap without being merged. A shell with negative volume is an internal cavity or a piece with flipped normals.
+- the number of **shells**, meaning separate connected surfaces. Sculpted kits often consist of pieces that overlap without being merged. A shell with negative volume is an internal cavity or a piece that was exported inside out.
+
+The two are told apart by where the shell lies (`fix_shells`): 24 points on its surface are tested against the other shells. If they are inside the rest of the part, the shell is a cavity and is kept. If not, it is a flipped piece and its triangles are re-wound. This matters because the slicer adds up surface crossings: left alone, a flipped piece counts as minus one, so it disappears and takes a bite out of whatever it overlaps. The fix is applied on every load, so `export` writes the corrected piece. A flipped piece buried entirely inside another one looks the same as a cavity and is left alone.
 
 If the whole mesh is inside out, the tool flips it before analysing (`outward`).
 
@@ -74,6 +76,8 @@ Lower is better. `rank --weights` changes the weights. The score narrows 300 dir
 
 `check` slices the solid in a given pose, at 0.3 mm pixels and one layer height by default.
 
+When the poses come from a sweep, they are taken in score order but at least 25 degrees apart (`spaced`, `--spread`). Neighbouring sweep directions are about 12 degrees apart and score almost the same, so without this the slices go to several copies of one pose. The labels keep the sweep rank.
+
 ### Slicing
 
 For each pixel, a vertical ray is tested against every triangle above that pixel (`_crossings`). Each crossing is recorded with the layer at which it happens and a sign: entering the solid or leaving it. Adding the signs up layer by layer gives, for every pixel of every layer, the number of surfaces the ray is inside.
@@ -102,13 +106,17 @@ Anything else is **sealed**: at the moment that layer prints, no path through th
 
 A pocket facing the plate overlaps the open space under it, so it is open from the start. A pocket facing the film starts under a solid roof and is sealed until its rim is reached. A hollow part with no drain holes is sealed throughout.
 
-`check` reports the largest sealed area in any layer, the sealed volume, and the height range. Poses with more than about 1 mm² sealed are rejected; smaller values are pixel noise.
+`check` reports the largest sealed area in any layer, the sealed volume, the height range and a grade. Up to 1 mm² is pixel noise and counts as no cup. A cup of up to 100 mm² and 0.3 ml is `minor`: that is the size of a key socket, and the Lessons in `SKILL.md` record sockets of 0.1 to 0.3 ml as tiny cups where a vent hole is optional. Anything larger is `MAJOR`. The two limits are `CUP_MINOR` in the code; they are a rule of thumb, not a measurement.
+
+A pocket that faces the film is sealed at any tilt short of horizontal: its floor always prints before the lowest point of its rim. Tilting only makes the sealed part smaller. So a part with a socket at each end has a cup in nearly every pose, and the choice is between cup sizes.
+
+`--cupscan N` looks for poses the score ranking would not offer. It slices the N best-scoring directions at 0.6 mm pixels and four layers per slice, which is enough to grade the cup, and then runs the full check on cup-free poses first and minor cups second, each in score order.
 
 ## Choosing a pose
 
 The order of the rules in `SKILL.md`:
 
-1. No sealed cup.
+1. No `MAJOR` cup. No cup at all where a good pose allows it; a `minor` cup when it is a key socket and the pose is otherwise the best.
 2. The largest layers should not come at the end of the print.
 3. Glue faces toward the plate, tilted 20 to 45 degrees, so supports land where they will be hidden. Tips of scales and shingles away from the plate.
 4. Then fewest long-floating islands, least visible down-facing area, least support.
